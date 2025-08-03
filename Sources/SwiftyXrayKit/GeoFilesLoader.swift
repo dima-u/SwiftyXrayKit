@@ -12,11 +12,20 @@ import Foundation
 /// This class handles the concurrent download of geographical IP and site database files
 /// that are required for Xray proxy functionality. It provides progress tracking and
 /// uses lightweight files to ensure fast VPN setup.
-public class GeoFilesLoader {
+public class GeoFilesLoader: @unchecked Sendable {
   /// important! Use lightweight files in order to make vpn setup fast enough
   public var geoIPUrl = URL(string: "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat")!
   public var geoSiteUrl = URL(string: "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat")!
   
+  // Track progress for both downloads (each represents 50% of total progress)
+  private var geoIPProgress: Double = 0.0
+  private var geoSiteProgress: Double = 0.0
+
+  private var progressCallback: ((Double) -> Void)?
+
+  /// obseving download progress
+  private var observers: [NSKeyValueObservation] = []
+
   /// Downloads geoip.dat and geosite.dat files concurrently to the specified directory.
   ///
   /// This method creates the target directory if it doesn't exist and downloads both geo files
@@ -48,20 +57,12 @@ public class GeoFilesLoader {
     
     // Create directory if it doesn't exist
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
-    
+
+    self.progressCallback = progressCallback
     // Define destination file paths
     let geoIPDestination = directory.appendingPathComponent("geoip.dat")
     let geoSiteDestination = directory.appendingPathComponent("geosite.dat")
-    
-    // Track progress for both downloads (each represents 50% of total progress)
-    var geoIPProgress: Double = 0.0
-    var geoSiteProgress: Double = 0.0
-    
-    let updateProgress = {
-      let totalProgress = (geoIPProgress + geoSiteProgress) / 2.0
-      progressCallback?(totalProgress)
-    }
-    
+
     // Download both files concurrently
     try await withThrowingTaskGroup(of: Void.self) { group in
       // Download GeoIP file
@@ -69,9 +70,8 @@ public class GeoFilesLoader {
         try await self.downloadFile(
           from: finalGeoIPURL,
           to: geoIPDestination,
-          progressCallback: { progress in
-            geoIPProgress = progress
-            updateProgress()
+          progressCallback: { [weak self] progress in
+            self?.updateGeoIPProgress(geoIpProgress: progress)
           }
         )
       }
@@ -81,36 +81,45 @@ public class GeoFilesLoader {
         try await self.downloadFile(
           from: finalGeoSiteURL,
           to: geoSiteDestination,
-          progressCallback: { progress in
-            geoSiteProgress = progress
-            updateProgress()
+          progressCallback: { [weak self] progress in
+            self?.updateGeoIPProgress(geoSiteProgress: progress)
           }
         )
       }
-      
       // Wait for both downloads to complete
       try await group.waitForAll()
+      observers.forEach({ $0.invalidate() })
+      observers.removeAll()
     }
-    
   }
+
+  private func updateGeoIPProgress(geoIpProgress: Double? = nil, geoSiteProgress: Double? = nil) {
+    if let geoIpProgress {
+      self.geoIPProgress = geoIpProgress
+    }
+    if let geoSiteProgress {
+      self.geoSiteProgress = geoSiteProgress
+    }
+    let totalProgress = (self.geoIPProgress + self.geoSiteProgress) / 2.0
+    progressCallback?(totalProgress)
+  }
+
+  private var progressObserver: NSKeyValueObservation?
+  
   
   private func downloadFile(
     from url: URL,
     to destination: URL,
-    progressCallback: @escaping (Double) -> Void
+    progressCallback: @Sendable @escaping (Double) -> Void
   ) async throws {
-    return try await withCheckedThrowingContinuation { continuation in
+    return try await withCheckedThrowingContinuation { [weak self] continuation in
       // Remove existing file if it exists
       try? FileManager.default.removeItem(at: destination)
       
       let urlRequest = URLRequest(url: url)
-      var progressObserver: NSKeyValueObservation?
       
       let downloadTask = URLSession.shared.downloadTask(with: urlRequest) { tempURL, response, error in
-        // Clean up observer
-        progressObserver?.invalidate()
-        progressObserver = nil
-        
+
         if let error = error {
           continuation.resume(throwing: error)
           return
@@ -135,16 +144,19 @@ public class GeoFilesLoader {
           continuation.resume(throwing: error)
         }
       }
-      
-      // Observe progress
-      progressObserver = downloadTask.progress.observe(\.fractionCompleted) { progress, _ in
-        DispatchQueue.main.async {
-          progressCallback(progress.fractionCompleted)
-        }
-      }
-      
+  
+      self?.subscribeForProgress(task: downloadTask, callback: progressCallback)
       // Start the download
       downloadTask.resume()
     }
+  }
+
+  private func subscribeForProgress(task: URLSessionDownloadTask, callback: @escaping @Sendable (Double) -> Void) {
+    let progressObserver = task.progress.observe(\.fractionCompleted) { progress, _ in
+          DispatchQueue.main.async {
+            callback(progress.fractionCompleted)
+          }
+    }
+    observers.append(progressObserver)
   }
 }

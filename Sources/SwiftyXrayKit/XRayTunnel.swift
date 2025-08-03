@@ -146,28 +146,28 @@ public actor XRayTunnel: NSObject {
     guard isRunning else { return }
     Task {
       packetFlow?.readPackets(completionHandler: { [weak self] packetsArray, protosArray in
+        guard let self else { return }
         Task {
-          guard let self, let shadowTunnel = await self.shadowTunnel else { return }
-          var totalBytesWritten: UInt32 = 0
-          
-          packetsArray.forEach { packet in
-            var bytesWritten: Int = 0
-            do {
-              try shadowTunnel.write(packet, ret0_: &bytesWritten)
-              totalBytesWritten += UInt32(bytesWritten)
-            } catch { }
-          }
-          
-          await self.update(transferred: self.bytesTransferred.incrementSent(by: totalBytesWritten))
-          await self.read()
+          await self.read(packetsArray: packetsArray)
         }
       })
     }
   }
-  
-  /// Updates the bytes transferred statistics
-  private func update(transferred: BytesTransferred) {
-    self.bytesTransferred = transferred
+
+  private func read(packetsArray: [Data]) {
+    guard let shadowTunnel = self.shadowTunnel else { return }
+    var totalBytesWritten: UInt32 = 0
+    
+    packetsArray.forEach { packet in
+      var bytesWritten: Int = 0
+      do {
+        try shadowTunnel.write(packet, ret0_: &bytesWritten)
+        totalBytesWritten += UInt32(bytesWritten)
+      } catch { }
+    }
+
+    bytesTransferred = bytesTransferred.incrementSent(by: totalBytesWritten)
+    read()
   }
 }
 
@@ -177,18 +177,20 @@ extension XRayTunnel: Tun2socksTunWriterProtocol {
       await stop()
     }
   }
-  
+
   public nonisolated func write(_ p0: Data?, n: UnsafeMutablePointer<Int>?) throws {
-    if let data = p0, data.count > 0 {
-      let version = IPVersion.scan(data) ?? .iPv4
-      Task {
-        await packetFlow?.writePackets([data], withProtocols: [NSNumber(value: version == .iPv4 ? AF_INET : AF_INET6)])
-        await self.update(transferred: self.bytesTransferred.incrementReceived(by: UInt32(data.count)))
-      }
+    guard let data = p0, data.count > 0 else { return }
+    Task {
+      await self.write(data: data)
     }
   }
+  
+  private func write(data: Data) {
+    let version = IPVersion.scan(data) ?? .iPv4
+    packetFlow?.writePackets([data], withProtocols: [NSNumber(value: version == .iPv4 ? AF_INET : AF_INET6)])
+    bytesTransferred = bytesTransferred.incrementReceived(by: UInt32(data.count))
+  }
 }
-
 /// IP protocol version detector
 enum IPVersion: UInt8 {
   case iPv4 = 4
