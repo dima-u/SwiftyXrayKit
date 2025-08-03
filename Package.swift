@@ -16,7 +16,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-      .package(url: "https://github.com/dima-u/SwiftyXrayCore", from: "1.0.1")
+      .package(url: "https://github.com/dima-u/SwiftyXrayCore", from: "1.0.0")
     ],
     targets: [
         .target(
