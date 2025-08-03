@@ -2,6 +2,10 @@
 
 A Swift wrapper and ready to use PacketTunnelProvider primitives for Xray-core functionality, providing easy-to-use APIs for iOS and macOS applications.
 
+[![SPM](https://img.shields.io/badge/SwiftPM-compatible-brightgreen.svg?style=flat)](https://github.com/apple/swift-package-manager)
+[![Swift 6.0](https://img.shields.io/badge/language-Swift6.0-orange.svg?style=flat)](https://developer.apple.com/swift)
+![Build](https://github.com/dima-u/SwiftyXrayKit/actions/workflows/swift.yml/badge.svg)
+
 ## Overview
 
 SwiftyXrayKit provides a clean Swift interface to Xray-core functionality through two main components:
