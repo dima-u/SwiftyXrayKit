@@ -14,7 +14,8 @@ SwiftyXrayKit provides a clean Swift interface to Xray-core functionality throug
 - **SwiftyXrayKit**: Swift wrapper providing high-level APIs for Xray operations
 
 ## Features
-
+- ✅ based on Xray 25.10.15
+- ✅ xhttp support
 - ✅ Port allocation management
 - ✅ Xray configuration and lifecycle management  
 - ✅ Share link to JSON conversion (VMess, VLESS, etc.)
@@ -30,7 +31,7 @@ Add SwiftyXrayKit to your project using Xcode or by adding it to your `Package.s
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/yourusername/SwiftyXrayKit.git", from: "1.0.0")
+    .package(url: "https://github.com/yourusername/SwiftyXrayKit.git", from: "1.1.0")
 ]
 ```
 

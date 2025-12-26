@@ -8,7 +8,7 @@
 import Foundation
 
 /// Tracks the amount of data transferred through the tunnel
-public struct BytesTransferred {
+public struct BytesTransferred: Sendable {
   /// Number of bytes received from the tunnel
   public var received: UInt32
   

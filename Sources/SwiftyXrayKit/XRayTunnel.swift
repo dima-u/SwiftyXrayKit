@@ -16,7 +16,7 @@ public actor XRayTunnel: NSObject {
   
   /// Current bytes transfer statistics
   public var bytesTransferred: BytesTransferred = .init()
-  
+
   /// Current state
   var isRunning = false
   
@@ -48,9 +48,9 @@ public actor XRayTunnel: NSObject {
     inboundSniffing: SniffingConfiguration? = nil
   ) throws {
     guard isRunning == false else { return }
-    
+
     try setupSocks5()
-    
+
     let jsonIntermediate: String
     switch config {
     case let .json(config):
@@ -58,22 +58,28 @@ public actor XRayTunnel: NSObject {
     case let .url(config):
       jsonIntermediate = try SwiftyXray.xrayShareLinkToJson(url: config)
     }
-    
+
     guard let jsonData = jsonIntermediate.data(using: .utf8),
           var jsonConfig = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any] else {
       throw SwiftyXRayError.invalidConfig
     }
-    
+
+    jsonConfig = jsonConfig.removingNullValues()
+
     jsonConfig = patchConfig(config: jsonConfig, sniffing: inboundSniffing)
-    
+
     try JSONSerialization.data(withJSONObject: jsonConfig).write(to: finalConfigPath)
-    
+
     try SwiftyXray.run(dataDir: dataDir.path, configPath: finalConfigPath.path)
-    
+
     isRunning = true
     read()
   }
-  
+
+  public func clearStats() {
+    bytesTransferred = .init()
+  }
+
   /// Stops the tunnel and cleans up resources
   public func stop() {
     try? SwiftyXray.stop()
@@ -92,9 +98,10 @@ public actor XRayTunnel: NSObject {
       "listen": "127.0.0.1",
       "port": socks5Port,
       "protocol": "socks",
-      "settings": ["udp": true]
+      "settings": ["udp": true],
+      "tag": "in_proxy"
     ]
-    
+
     if let sniffing {
       inbound["sniffing"] = [
         "destOverride": sniffing.destOverride,
@@ -104,11 +111,11 @@ public actor XRayTunnel: NSObject {
         "domainsExcluded": sniffing.domainsExcluded
       ]
     }
-    
-    if config["dns"] == nil {
+
+    if (config["dns"] as? [String: Any]) == nil {
       config["dns"] = ["servers": defaultNameServers, "queryStrategy": "UseIPv4"]
     }
-    
+
     config["inbounds"] = [inbound]
     return config
   }
@@ -203,5 +210,39 @@ enum IPVersion: UInt8 {
     guard data.count > 0 else { return nil }
     let version = (data.prefix(1) as NSData).bytes.bindMemory(to: UInt8.self, capacity: data.count).pointee >> 4
     return IPVersion(rawValue: version)
+  }
+}
+
+// helper method to clean nulled keys
+extension Dictionary where Key == String, Value == Any {
+  func removingNullValues() -> [String: Any] {
+      var newDict = [String: Any]()
+      for (key, value) in self {
+          if let array = value as? [Any] {
+              // Handle arrays: remove NSNull from elements
+              let newArray = array.compactMap { element -> Any? in
+                  if let nestedDict = element as? [String: Any] {
+                      return nestedDict.removingNullValues() // Recurse for nested dictionaries
+                  } else if element is NSNull {
+                      return nil // Remove NSNull
+                  }
+                  return element
+              }
+              newDict[key] = newArray
+          } else if let nestedDict = value as? [String: Any] {
+              // Handle nested dictionaries: recurse
+              newDict[key] = nestedDict.removingNullValues()
+          } else if !(value is NSNull) {
+              // Keep values that are not NSNull
+            if key == "sendThrough" {
+              
+            } else if key == "targetStrategy" && (value as? String) == "" {
+              
+            } else {
+              newDict[key] = value
+            }
+          }
+      }
+      return newDict
   }
 }
