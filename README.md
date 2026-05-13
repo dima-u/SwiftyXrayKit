@@ -1,6 +1,6 @@
 # SwiftyXrayKit
 
-A Swift wrapper and ready to use PacketTunnelProvider primitives for Xray-core functionality, providing easy-to-use APIs for iOS and macOS applications.
+A Swift package for running Xray-core inside a `NEPacketTunnelProvider` on iOS and macOS.
 
 [![SPM](https://img.shields.io/badge/SwiftPM-compatible-brightgreen.svg?style=flat)](https://github.com/apple/swift-package-manager)
 [![Swift 6.0](https://img.shields.io/badge/language-Swift6.0-orange.svg?style=flat)](https://developer.apple.com/swift)
@@ -8,137 +8,163 @@ A Swift wrapper and ready to use PacketTunnelProvider primitives for Xray-core f
 
 ## Overview
 
-SwiftyXrayKit provides a clean Swift interface to Xray-core functionality through two main components:
+SwiftyXrayKit wraps [`libXray-apple`](https://github.com/dima-u/libXray-apple) — a custom Apple-platform build of [XTLS/libXray](https://github.com/XTLS/libXray) using a patched [Xray-core](https://github.com/dima-u/Xray-core-apple). The key patch makes Xray's TUN inbound work over a `SOCK_STREAM` socketpair, which is required inside the iOS Network Extension sandbox where `SOCK_SEQPACKET` is forbidden.
 
-- **SwiftyXrayCore**: Binary framework package containing the XrayApple.xcframework
-- **SwiftyXrayKit**: Swift wrapper providing high-level APIs for Xray operations
+No SOCKS5 proxy or tun2socks layer needed — packets flow directly between `NEPacketTunnelFlow` and Xray's gVisor TUN stack.
+
+## What's included
+
+| | |
+|---|---|
+| `XrayBridge` | Bridges `NEPacketTunnelFlow` ↔ Xray TUN inbound via a `SOCK_STREAM` socketpair |
+| `SwiftyXray` | Low-level libXray wrapper: run, stop, share-link conversion, port allocation |
+| `XrayTuningPreset` | Tuning parameters with `.mobile`, `.desktop`, and `.default` presets |
+| `GeoFilesLoader` | Downloads `geoip.dat` / `geosite.dat` with progress tracking |
 
 ## Features
-- ✅ based on Xray 25.10.15
-- ✅ xhttp support
-- ✅ Port allocation management
-- ✅ Xray configuration and lifecycle management  
-- ✅ Share link to JSON conversion (VMess, VLESS, etc.)
-- ✅ Network tunnel integration for VPN functionality
-- ✅ iOS and macOS support
-- ✅ geo-site and geo-ip downloader
+
+- ✅ Based on Xray-core v26.3.27
+- ✅ iOS 15+ and macOS 13+
+- ✅ Direct TUN inbound — no SOCKS5 or tun2socks
+- ✅ Share link input (VMess, VLESS, and others)
+- ✅ Tuning presets for mobile and desktop
+- ✅ Config transform hook — mutate the final JSON before run
+- ✅ Raw config file support — bypass kit patching entirely
+- ✅ Geo-site and geo-ip downloader
 
 ## Installation
 
-### Swift Package Manager
-
-Add SwiftyXrayKit to your project using Xcode or by adding it to your `Package.swift`:
-
 ```swift
 dependencies: [
-    .package(url: "https://github.com/yourusername/SwiftyXrayKit.git", from: "1.1.0")
+    .package(url: "https://github.com/dima-u/SwiftyXrayKit.git", from: "1.1.0")
 ]
 ```
 
 ## Usage
 
-1. Create a Packet Tunnel Provider
+### Minimal setup
 
 ```swift
 import NetworkExtension
 import SwiftyXrayKit
 
-class SimplePacketTunnelProvider: NEPacketTunnelProvider {
-  
-  enum PacketTunnelError: Error {
-    case defaultError
-  }
+class PacketTunnelProvider: NEPacketTunnelProvider {
 
-  var xrayClient: XRayTunnel?
-}
-```
+    var bridge: XrayBridge?
 
-2. Implement Tunnel Lifecycle Methods
-
-Starting the Tunnel
-
-Override startTunnel(options:completionHandler:) to configure network settings and start XRay:
-
-```swift
-override func startTunnel(options: [String : NSObject]?, completionHandler: @escaping (Error?) -> Void) {
-  // Configure the network settings for the tunnel (IP addresses, DNS, routes, etc.)
-  setTunnelNetworkSettings(networkSettings) { error in
-    guard error == nil else {
-      completionHandler(error)
-      return
+    override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
+        setTunnelNetworkSettings(makeNetworkSettings()) { [weak self] error in
+            guard let self, error == nil else { completionHandler(error); return }
+            do {
+                try self.startXray()
+                completionHandler(nil)
+            } catch {
+                completionHandler(error)
+            }
+        }
     }
-    
-    // Start the XRay proxy service
-    self.startXrayAndSocksProxy(completionHandler)
-  }
-}
-```
 
-XRay Initialization and Configuration
-
-```swift
-private func startXrayAndSocksProxy(_ completion: ((Error?)->Void)? = nil) {
-  // Path to GeoIP database files (used for routing decisions)
-  let geoIpPath = FileManager.default.documentDirectory
-  
-  // Path to the XRay configuration file
-  let configPath = FileManager.default.documentDirectory.appending(path: "config.json")
-  
-  // Initialize XRay tunnel with the packet flow from Network Extension
-  xrayClient = XRayTunnel(packetFlow: packetFlow)
-  
-  // Start XRay asynchronously
-  Task {
-    do {
-      // Read the configuration file content
-      let config = try String(contentsOf: configPath, encoding: .utf8)
-      
-      // Path where the final processed configuration will be saved
-      let finalPath = FileManager.default.documentDirectory.appending(path: "config_final.json")
-      
-      // Start the XRay tunnel with the configuration
-      try await xrayClient?.run(dataDir: geoIpPath, config: .json(config), finalConfigPath: finalPath)
-      
-      // Notify success
-      completion?(nil)
-    } catch {
-      print("error: \(error)")
-      // Notify failure
-      completion?(error)
+    private func startXray() throws {
+        let config = try String(contentsOf: configFileURL, encoding: .utf8)
+        let bridge = XrayBridge(packetFlow: packetFlow)
+        try bridge.start(
+            config: .json(config),
+            dataDir: geoDataDir,
+            finalConfigPath: finalConfigURL
+        )
+        self.bridge = bridge
     }
-  }
+
+    override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        bridge?.stop()
+        bridge = nil
+        completionHandler()
+    }
 }
 ```
 
-Stopping the Tunnel
+### Share link input
+
+Pass a VMess / VLESS / etc. share link directly — the kit converts it to JSON:
 
 ```swift
-override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-  self.stopTunnel(completionHandler: completionHandler)
-}
+try bridge.start(config: .url("vless://..."), dataDir: geoDir, finalConfigPath: finalPath)
+```
 
-private func stopTunnel(completionHandler: @escaping () -> Void) {
-  Task {
-    // Stop the XRay client gracefully
-    await xrayClient?.stop()
-    
-    // Notify that tunnel has been stopped
-    completionHandler()
-  }
+### Tuning presets
+
+`.default` resolves to `.mobile` on iOS and `.desktop` on macOS:
+
+```swift
+try bridge.start(config: .json(config), dataDir: geoDir, finalConfigPath: finalPath,
+                 preset: .mobile)
+```
+
+Customise individual fields:
+
+```swift
+var preset = XrayTuningPreset.mobile
+preset.memoryLimitMB = 40
+preset.tcpMaxInFlight = 256
+try bridge.start(config: .json(config), dataDir: geoDir, finalConfigPath: finalPath,
+                 preset: preset)
+```
+
+| Preset | memoryLimitMB | tcpBufMaxKB | tcpMaxInFlight | udpMaxConns | idleTimeoutSec |
+|---|---|---|---|---|---|
+| `.mobile` | 30 | 1024 | 512 | 256 | 120 |
+| `.desktop` | 50 | 4096 | 8192 | 4096 | 300 |
+
+### Config transform
+
+Intercept the kit-built config dictionary (TUN inbound already injected) and return a modified copy:
+
+```swift
+try bridge.start(config: .json(config), dataDir: geoDir, finalConfigPath: finalPath,
+                 configTransform: { config in
+                     var c = config
+                     c["log"] = ["loglevel": "warning"]
+                     c["dns"] = ["servers": ["1.1.1.1", "8.8.8.8"]]
+                     return c
+                 })
+```
+
+### Raw config file
+
+Skip all kit patching and run a fully pre-built Xray JSON:
+
+```swift
+try bridge.startWithRawConfig(rawConfigPath: myConfigURL, dataDir: geoDir)
+```
+
+### Geo files
+
+```swift
+let loader = GeoFilesLoader()
+try await loader.download(to: geoDataDir) { progress in
+    print("Downloading: \(Int(progress * 100))%")
 }
 ```
 
-4. Configuration Requirements
+### Bytes transferred
 
-Before starting the tunnel, ensure you have:
+```swift
+// Call periodically to get stats since last call
+let stats = bridge.getAndClearStats()
+print("↑ \(stats.sent) ↓ \(stats.received)")
+```
 
-1.  XRay Configuration File: Place your config.json file in the document directory
-2.  GeoIP Database: Ensure GeoIP files are available in the document directory. You can use `GeoFilesLoader` to download GeoIp files.
-3.  Network Settings: Configure networkSettings with appropriate IP addresses, DNS servers, and routes
+## Backend
 
+The xcframework is built from [`dima-u/libXray-apple`](https://github.com/dima-u/libXray-apple) with patches on top of [`dima-u/Xray-core-apple`](https://github.com/dima-u/Xray-core-apple):
 
-This implementation provides a robust VPN solution using XRay-core through SwiftyXrayKit, with proper lifecycle management and error handling.
+- **`tun_darwin.go`** — `SOCK_STREAM` socketpair support in the TUN inbound (iOS NE sandbox doesn't allow `SOCK_SEQPACKET`)
+- **`stack_gvisor.go`** — `SetTCPBufMaxKB`, `SetTCPMaxInFlight` tuning; reduced TIME_WAIT (60s → 15s)
+- **`udp_fullcone.go`** — `SetMaxUDPConns` with enforcement
+- **`condition_geoip.go`** — `ClearGeoIPCache` for clean restart
+- **`tls/config.go`** — `ResetSessionCache` for clean restart
+- **`distro/all/all.go`** — slimmed to: VLESS/VMess outbound, REALITY, WebSocket, xHTTP, splitHTTP
 
-License
+## License
 
-SwiftyXrayKit is released under the Apache 2.0 License. See the LICENSE file for details.
+Apache 2.0. See [LICENSE](LICENSE).

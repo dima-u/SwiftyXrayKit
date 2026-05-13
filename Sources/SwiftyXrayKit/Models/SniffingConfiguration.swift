@@ -1,6 +1,6 @@
 //
 // SniffingConfiguration.swift
-// XrayWrapper
+// SwiftyXrayKit
 //
 // Copyright © 2025 Dmitry Ulyanov
 //

@@ -15,15 +15,16 @@ let package = Package(
         targets: ["SwiftyXrayKit"]
       ),
     ],
-    dependencies: [
-      .package(url: "https://github.com/dima-u/SwiftyXrayCore", from: "1.1.0")
-    ],
+    dependencies: [],
     targets: [
+      .binaryTarget(
+        name: "LibXray",
+        url: "https://github.com/dima-u/libXray-apple/releases/download/v26.3.27-ios/LibXray.xcframework.zip",
+        checksum: "3a0f43e908e8acaa84b17467614cded31d12cc1918a4f89eb928caecfd8b2b09"
+      ),
       .target(
         name: "SwiftyXrayKit",
-        dependencies: [
-          .product(name: "SwiftyXrayCore", package: "SwiftyXrayCore")
-        ],
+        dependencies: ["LibXray"],
         path: "Sources/SwiftyXrayKit",
         linkerSettings: [
           .linkedLibrary("resolv")

@@ -7,7 +7,7 @@
 
 import Foundation
 import Swift
-import SwiftyXrayCore
+import LibXray
 
 /// Main wrapper class for Xray functionality
 public class SwiftyXray {
@@ -24,7 +24,37 @@ public class SwiftyXray {
       throw SwiftyXRayError.invalidResponse(base64JsonResponse)
     }
   }
-  
+
+  /// Sets the TUN file descriptor used by the tun inbound.
+  /// Must be called before run().
+  public static func setTunFd(_ fd: Int32) {
+    LibXraySetTunFd(fd)
+  }
+
+  /// Sets the Go heap memory ceiling in megabytes.
+  /// Must be called before run().
+  public static func setMemoryLimitMB(_ mb: Int64) {
+    LibXraySetMemoryLimitMB(mb)
+  }
+
+  /// Sets the max TCP RX/TX buffer size per connection in kilobytes.
+  /// Must be called before run().
+  public static func setTCPBufMaxKB(_ kb: Int32) {
+    LibXraySetTCPBufMaxKB(kb)
+  }
+
+  /// Sets the max concurrent TCP connections.
+  /// Must be called before run().
+  public static func setTCPMaxInFlight(_ n: Int32) {
+    LibXraySetTCPMaxInFlight(n)
+  }
+
+  /// Sets the max concurrent UDP sessions.
+  /// Must be called before run().
+  public static func setMaxUDPConns(_ n: Int32) {
+    LibXraySetMaxUDPConns(n)
+  }
+
   /// Runs Xray with the specified configuration.
   /// Run this method only if you have your own socks5 proxy setup or any other inbound.
   ///
@@ -32,16 +62,26 @@ public class SwiftyXray {
   ///   - dataDir: Directory for Xray data files
   ///   - configPath: Path to the Xray configuration file
   /// - Throws: SwiftyXRayError if Xray fails to start
-  public static func run(dataDir: String, configPath: String) throws {
+  public static func run(dataDir: String, configPath: String, traceHandle: ((String) -> Void)? = nil) throws {
     let jsonRequest = try JSONEncoder().encode(XRayRunRequest(datDir: dataDir, configPath: configPath))
+
+    traceHandle?("###SwiftyXray request: \(jsonRequest)")
     let base64JsonResponse = LibXrayRunXray(jsonRequest.base64EncodedString())
-    
+
+    traceHandle?("###SwiftyXray file path: \(configPath)")
+
+    let exists = FileManager.default.fileExists(atPath: configPath)
+    traceHandle?("###SwiftyXray file exists: \(exists)")
+
     let runResponse = try XrayBoolResponse(base64String: base64JsonResponse)
     if !runResponse.success {
+      traceHandle?("###SwiftyXray failed to launch!")
       throw SwiftyXRayError.invalidResponse(base64JsonResponse)
+    } else {
+      traceHandle?("###SwiftyXray started succesful!")
     }
   }
-  
+
   /// Stops the running Xray instance
   /// - Throws: SwiftyXRayError if stopping fails
   public static func stop() throws {
@@ -92,7 +132,7 @@ public class SwiftyXray {
     guard let nestedObj = json["data"] as? Dictionary<String, Any> else {
       throw SwiftyXRayError.invalidResponse(json.description)
     }
-    
+
     guard let dt = try? JSONSerialization.data(withJSONObject: nestedObj),
           let str = String(data: dt, encoding: .utf8) else {
       throw SwiftyXRayError.invalidResponse(base64JsonResponse)
